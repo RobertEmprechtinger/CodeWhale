@@ -261,6 +261,7 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
+    const MAX_VISIBLE_EVENTS = 100;
     const state = {
       threadId: "",
       activeTurnId: "",
@@ -333,7 +334,7 @@
       }
       if (name === "item.completed" || name === "item.failed") {
         const item = payload.item || {};
-        return (name === "item.completed" ? "Completed: " : "Failed: ") + (item.summary || item.kind || "");
+        return (name === "item.completed" ? "Completed: " : "Failed: ") + (item.detail || item.summary || item.kind || "");
       }
       if (name === "approval.required") {
         return "Approval required: " + (payload.tool_name || "") + "\n" + (payload.description || "");
@@ -361,6 +362,17 @@
       return { id: approvalId };
     }
 
+    function pruneVisibleEvents() {
+      const events = $("events");
+      while (events.childElementCount > MAX_VISIBLE_EVENTS) {
+        events.firstElementChild.remove();
+      }
+    }
+
+    function updateEventCount() {
+      $("event-count").textContent = $("events").childElementCount + " of " + state.eventCount + " events";
+    }
+
     async function decideApproval(approvalId, decision, container) {
       for (const button of container.querySelectorAll("button")) button.disabled = true;
       const remember = $("remember-approval").checked;
@@ -380,13 +392,37 @@
     function appendEvent(name, data) {
       const text = eventText(name, data);
       if (!text) return;
+      const events = $("events");
+
+      if (name === "item.delta") {
+        const last = events.lastElementChild;
+        const body = last?.dataset.eventName === "item.delta"
+          ? last.querySelector(".event-body")
+          : null;
+        if (body) {
+          body.textContent += text;
+          state.eventCount += 1;
+          updateEventCount();
+          events.scrollTop = events.scrollHeight;
+          return;
+        }
+      }
+
       const item = document.createElement("div");
       item.className = "event";
+      item.dataset.eventName = name;
       if (name === "item.delta") item.classList.add("agent");
       if (name === "item.started" || name.includes("tool")) item.classList.add("tool");
       if (name.includes("failed") || name.includes("denied") || name.includes("timeout")) item.classList.add("error");
       if (name === "turn.completed" || name === "approval.decided") item.classList.add("ok");
-      item.innerHTML = "<div class='meta'>" + escapeHtml(name) + "</div>" + escapeHtml(text);
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = name;
+      const body = document.createElement("span");
+      body.className = "event-body";
+      body.textContent = text;
+      item.appendChild(meta);
+      item.appendChild(body);
 
       const approval = approvalInfo(name, data);
       if (approval) {
@@ -407,10 +443,11 @@
         item.appendChild(actions);
       }
 
-      $("events").appendChild(item);
+      events.appendChild(item);
+      pruneVisibleEvents();
       state.eventCount += 1;
-      $("event-count").textContent = state.eventCount + " events";
-      $("events").scrollTop = $("events").scrollHeight;
+      updateEventCount();
+      events.scrollTop = events.scrollHeight;
     }
 
     async function loadThreads() {
@@ -455,7 +492,8 @@
       $("active-title").textContent = title || id;
       $("events").innerHTML = "";
       if (state.source) state.source.close();
-      const qs = "?since_seq=0" + (token() ? "&token=" + encodeURIComponent(token()) : "");
+      const qs = "?since_seq=0&replay_limit=" + MAX_VISIBLE_EVENTS +
+        (token() ? "&token=" + encodeURIComponent(token()) : "");
       const source = new EventSource("/v1/threads/" + encodeURIComponent(id) + "/events" + qs);
       state.source = source;
       const names = [
